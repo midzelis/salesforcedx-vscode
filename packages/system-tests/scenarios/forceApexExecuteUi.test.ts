@@ -29,13 +29,19 @@ describe(TITLE, () => {
   let username: string;
 
   before(async () => {
+    console.log('----- before');
     await util.createSFDXProject(PROJECT_NAME);
+    console.log('----- before, PROJECT_NAME' + PROJECT_NAME);
     username = await util.createScratchOrg(PROJECT_NAME);
+    console.log('----- before, username' + username);
     app = new SpectronApplication(VSCODE_BINARY_PATH, TITLE, 2, [PROJECT_DIR]);
+    console.log('----- before, app', app);
     common = new CommonActions(app);
-
+    console.log('----- before, common', common);
     await app.start();
+    console.log('----- before, app start');
     await app.wait();
+    console.log('----- before, app wait');
   });
 
   after(async () => {

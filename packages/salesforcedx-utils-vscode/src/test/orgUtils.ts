@@ -44,7 +44,13 @@ export async function createScratchOrg(projectName: string): Promise<string> {
   ).execute();
   const cmdOutput = new CommandOutput();
   const result = await cmdOutput.getCmdResult(execution);
-  const username = JSON.parse(result).result.username;
+  // const username = JSON.parse(result).result.username;
+  let username;
+  try {
+    username = JSON.parse(result).result.username;
+  } catch (e) {
+    console.log('Error while parsing username: ', e);
+  }
   return Promise.resolve(username);
 }
 

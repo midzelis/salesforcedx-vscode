@@ -27,7 +27,9 @@ const mocha = new Mocha({
 });
 mocha.useColors(true);
 
-const files = glob.sync('out/**/*.test.js', { cwd: process.cwd() });
+const files = glob.sync('out/**/forceApexExecuteUi.test.js', {
+  cwd: process.cwd()
+});
 files.forEach(f => mocha.addFile(path.join(process.cwd(), f)));
 
 mocha.run(failures => {
