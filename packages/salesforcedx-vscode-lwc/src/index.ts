@@ -111,7 +111,7 @@ function startLWCLanguageServer(
   serverModule: string,
   context: vscode.ExtensionContext
 ) {
-  const debugOptions = { execArgv: ['--nolazy', '--inspect-brk=6009'] };
+  const debugOptions = { execArgv: ['--nolazy', '--inspect=6009'] };
   // If the extension is launched in debug mode then the debug server options are used
   // Otherwise the run options are used
   const serverOptions: ServerOptions = {
