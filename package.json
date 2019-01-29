@@ -39,7 +39,8 @@
     "reformat": "node scripts/reformat-with-prettier.js",
     "snyk:test": "lerna exec --bail=false --ignore salesforcedx-vscode -- snyk test --severity-threshold=medium --show-vulnerable-paths=false",
     "snyk:monitor": "lerna exec --bail=false --ignore salesforcedx-vscode -- snyk monitor --severity-threshold=medium --show-vulnerable-paths=false --org=vazexqi",
-    "aggregateJUnit": "node scripts/aggregate-junit-xml.js"
+    "aggregateJUnit": "node scripts/aggregate-junit-xml.js",
+    "link-lsp": "yarn lerna exec yarn link aura-language-server lwc-language-server lightning-lsp-common --scope salesforcedx-vscode-aura && yarn lerna exec yarn link lwc-language-server lightning-lsp-common --scope salesforcedx-vscode-lwc"
   },
   "repository": {
     "type": "git",
@@ -47,6 +48,7 @@
   },
   "license": "BSD-3-Clause",
   "dependencies": {
-    "node": "^8.9.4"
+    "node": "^8.9.4",
+    "vscode": "^1.1.28"
   }
 }
