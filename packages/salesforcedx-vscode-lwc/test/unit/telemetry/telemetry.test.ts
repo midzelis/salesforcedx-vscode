@@ -26,7 +26,7 @@ describe('Telemetry', () => {
     const telemetryService = TelemetryService.getInstance();
     telemetryService.initializeService(reporter, true);
 
-    telemetryService.sendExtensionActivationEvent();
+    await telemetryService.sendExtensionActivationEvent();
     assert.calledOnce(sendEvent);
   });
 
@@ -34,7 +34,7 @@ describe('Telemetry', () => {
     const telemetryService = TelemetryService.getInstance();
     telemetryService.initializeService(reporter, false);
 
-    telemetryService.sendCommandEvent('force_lightning_lwc_component_create');
+    await telemetryService.sendCommandEvent('force_lightning_lwc_component_create');
     assert.notCalled(sendEvent);
   });
 
@@ -42,7 +42,7 @@ describe('Telemetry', () => {
     const telemetryService = TelemetryService.getInstance();
     telemetryService.initializeService(reporter, true);
 
-    telemetryService.sendCommandEvent('force_lightning_lwc_component_create');
+    await telemetryService.sendCommandEvent('force_lightning_lwc_component_create');
     assert.calledOnce(sendEvent);
 
     const expectedData = {
@@ -56,7 +56,7 @@ describe('Telemetry', () => {
     const telemetryService = TelemetryService.getInstance();
     telemetryService.initializeService(reporter, true);
 
-    telemetryService.sendExtensionActivationEvent();
+    await telemetryService.sendExtensionActivationEvent();
     assert.calledOnce(sendEvent);
 
     const expectedData = {
@@ -69,7 +69,7 @@ describe('Telemetry', () => {
     const telemetryService = TelemetryService.getInstance();
     telemetryService.initializeService(reporter, true);
 
-    telemetryService.sendExtensionDeactivationEvent();
+    await telemetryService.sendExtensionDeactivationEvent();
     assert.calledOnce(sendEvent);
 
     const expectedData = {
