@@ -7,7 +7,8 @@
 
 import {
   Command,
-  SfdxCommandBuilder
+  SfdxCommandBuilder,
+  TestRunner
 } from '@salesforce/salesforcedx-utils-vscode/out/src/cli';
 import {
   CancelResponse,
@@ -19,6 +20,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { nls } from '../messages';
 import { sfdxCoreSettings } from '../settings';
+import { getRootWorkspacePath, hasRootWorkspace } from '../util';
 import {
   SfdxCommandlet,
   SfdxCommandletExecutor,
@@ -86,11 +88,17 @@ export class ForceApexTestRunCommandFactory {
   private data: ApexTestQuickPickItem;
   private getCodeCoverage: boolean;
   private builder: SfdxCommandBuilder = new SfdxCommandBuilder();
-  private testRunExecutorCommand: Command;
+  private testRunExecutorCommand!: Command;
+  private outputToJson: string;
 
-  constructor(data: ApexTestQuickPickItem, getCodeCoverage: boolean) {
+  constructor(
+    data: ApexTestQuickPickItem,
+    getCodeCoverage: boolean,
+    outputToJson: string
+  ) {
     this.data = data;
     this.getCodeCoverage = getCodeCoverage;
+    this.outputToJson = outputToJson;
   }
 
   public constructExecutorCommand(): Command {
@@ -107,9 +115,10 @@ export class ForceApexTestRunCommandFactory {
         );
         break;
       case TestType.Class:
-        this.builder = this.builder
-          .withFlag('--classnames', `${this.data.label}`)
-          .withArg('--synchronous');
+        this.builder = this.builder.withFlag(
+          '--classnames',
+          `${this.data.label}`
+        );
         break;
       default:
         break;
@@ -121,6 +130,7 @@ export class ForceApexTestRunCommandFactory {
 
     this.builder = this.builder
       .withFlag('--resultformat', 'human')
+      .withFlag('--outputdir', this.outputToJson)
       .withFlag('--loglevel', 'error');
 
     this.testRunExecutorCommand = this.builder.build();
@@ -128,16 +138,28 @@ export class ForceApexTestRunCommandFactory {
   }
 }
 
+function getTempFolder(): string {
+  if (hasRootWorkspace()) {
+    const apexDir = new TestRunner().getTempFolder(
+      getRootWorkspacePath(),
+      'apex'
+    );
+    return apexDir;
+  } else {
+    throw new Error(nls.localize('cannot_determine_workspace'));
+  }
+}
+
 export class ForceApexTestRunExecutor extends SfdxCommandletExecutor<
   ApexTestQuickPickItem
 > {
   public build(data: ApexTestQuickPickItem): Command {
-    const getCodeCoverage: boolean = sfdxCoreSettings
-      .getConfiguration()
-      .get('retrieve-test-code-coverage') as boolean;
+    const getCodeCoverage = sfdxCoreSettings.getRetrieveTestCodeCoverage();
+    const outputToJson = getTempFolder();
     const factory: ForceApexTestRunCommandFactory = new ForceApexTestRunCommandFactory(
       data,
-      getCodeCoverage
+      getCodeCoverage,
+      outputToJson
     );
     return factory.constructExecutorCommand();
   }

@@ -7,103 +7,123 @@
 
 import {
   CliCommandExecutor,
-  Command,
-  ForceDeployErrorParser,
-  SfdxCommandBuilder
+  ForceDeployResultParser
 } from '@salesforce/salesforcedx-utils-vscode/out/src/cli';
+import {
+  Row,
+  Table
+} from '@salesforce/salesforcedx-utils-vscode/out/src/output';
 import { ContinueResponse } from '@salesforce/salesforcedx-utils-vscode/out/src/types';
 import * as vscode from 'vscode';
+import { channelService } from '../channels';
 import { handleDiagnosticErrors } from '../diagnostics';
 import { nls } from '../messages';
+import { notificationService, ProgressNotification } from '../notifications';
+import { taskViewService } from '../statuses';
 import { telemetryService } from '../telemetry';
-import {
-  SfdxCommandlet,
-  SfdxCommandletExecutor,
-  SfdxWorkspaceChecker
-} from './commands';
-import {
-  FileType,
-  ManifestOrSourcePathGatherer,
-  SelectedPath
-} from './forceSourceRetrieve';
+import { getRootWorkspacePath } from '../util';
+import { SfdxCommandletExecutor } from './commands';
 
-vscode.workspace.onDidChangeTextDocument(e => {
-  if (ForceSourceDeployExecutor.errorCollection.has(e.document.uri)) {
-    ForceSourceDeployExecutor.errorCollection.delete(e.document.uri);
-  }
-});
-
-export class ForceSourceDeployExecutor extends SfdxCommandletExecutor<
-  SelectedPath
+export abstract class ForceSourceDeployExecutor extends SfdxCommandletExecutor<
+  string
 > {
   public static errorCollection = vscode.languages.createDiagnosticCollection(
     'deploy-errors'
   );
 
-  public build(data: SelectedPath): Command {
-    const commandBuilder = new SfdxCommandBuilder()
-      .withDescription(nls.localize('force_source_deploy_text'))
-      .withArg('force:source:deploy')
-      .withLogName('force_source_deploy')
-      .withJson();
-    if (data.type === FileType.Manifest) {
-      commandBuilder.withFlag('--manifest', data.filePath);
-    } else {
-      commandBuilder.withFlag('--sourcepath', data.filePath);
-    }
-    return commandBuilder.build();
-  }
-
-  public execute(response: ContinueResponse<SelectedPath>): void {
+  public execute(response: ContinueResponse<string>): void {
+    const startTime = process.hrtime();
     const cancellationTokenSource = new vscode.CancellationTokenSource();
     const cancellationToken = cancellationTokenSource.token;
-    const workspacePath = vscode.workspace.workspaceFolders
-      ? vscode.workspace.workspaceFolders[0].uri.fsPath
-      : '';
-    const execFilePath = response.data.filePath;
+    const workspacePath = getRootWorkspacePath() || '';
+    const execFilePathOrPaths = response.data;
     const execution = new CliCommandExecutor(this.build(response.data), {
-      cwd: workspacePath
+      cwd: workspacePath,
+      env: { SFDX_JSON_TO_STDOUT: 'true' }
     }).execute(cancellationToken);
 
-    let stdErr = '';
-    execution.stderrSubject.subscribe(realData => {
-      stdErr += realData.toString();
+    channelService.streamCommandStartStop(execution);
+    channelService.showChannelOutput();
+
+    let stdOut = '';
+    execution.stdoutSubject.subscribe(realData => {
+      stdOut += realData.toString();
     });
 
     execution.processExitSubject.subscribe(async exitCode => {
-      if (exitCode !== 0) {
-        try {
-          const deployErrorParser = new ForceDeployErrorParser();
-          const fileErrors = deployErrorParser.parse(stdErr);
+      this.logMetric(execution.command.logName, startTime);
+      try {
+        const deployParser = new ForceDeployResultParser(stdOut);
+        const errors = deployParser.getErrors();
+        if (errors) {
           handleDiagnosticErrors(
-            fileErrors,
+            errors,
             workspacePath,
-            execFilePath,
+            execFilePathOrPaths,
             ForceSourceDeployExecutor.errorCollection
           );
-        } catch (e) {
-          telemetryService.sendError(
-            'Error while creating diagnostics for vscode problem view.'
-          );
-          console.error(
-            'Error while creating diagnostics for vscode problem view.'
-          );
+        } else {
+          ForceSourceDeployExecutor.errorCollection.clear();
         }
+        this.outputResult(deployParser);
+      } catch (e) {
+        telemetryService.sendError(
+          'Error while creating diagnostics for vscode problem view.'
+        );
+        console.error(
+          'Error while creating diagnostics for vscode problem view.'
+        );
       }
     });
 
-    this.attachExecution(execution, cancellationTokenSource, cancellationToken);
-    this.logMetric(execution.command.logName);
+    notificationService.reportCommandExecutionStatus(
+      execution,
+      cancellationToken
+    );
+    ProgressNotification.show(execution, cancellationTokenSource);
+    taskViewService.addCommandExecution(execution, cancellationTokenSource);
   }
-}
 
-const workspaceChecker = new SfdxWorkspaceChecker();
+  private outputResult(parser: ForceDeployResultParser) {
+    const table = new Table();
+    const errors = parser.getErrors();
+    const successes = parser.getSuccesses();
+    const deployedSource = successes
+      ? successes.result.deployedSource
+      : undefined;
 
-export async function forceSourceDeploy(explorerPath: any) {
-  const commandlet = new SfdxCommandlet(
-    workspaceChecker,
-    new ManifestOrSourcePathGatherer(explorerPath),
-    new ForceSourceDeployExecutor()
-  );
-  await commandlet.run();
+    if (deployedSource) {
+      const outputTable = table.createTable(
+        (deployedSource as unknown) as Row[],
+        [
+          { key: 'state', label: nls.localize('table_header_state') },
+          { key: 'fullName', label: nls.localize('table_header_full_name') },
+          { key: 'type', label: nls.localize('table_header_type') },
+          { key: 'filePath', label: nls.localize('table_header_project_path') }
+        ]
+      );
+      channelService.appendLine('=== Deployed Source');
+      channelService.appendLine(outputTable);
+    }
+
+    if (errors) {
+      const { name, message, result } = errors;
+      if (result) {
+        const outputTable = table.createTable(
+          (errors.result as unknown) as Row[],
+          [
+            {
+              key: 'filePath',
+              label: nls.localize('table_header_project_path')
+            },
+            { key: 'error', label: nls.localize('table_header_errors') }
+          ]
+        );
+        channelService.appendLine('=== Deploy Errors');
+        channelService.appendLine(outputTable);
+      } else if (name && message) {
+        channelService.appendLine(`${name}: ${message}\n`);
+      }
+    }
+  }
 }

@@ -27,6 +27,7 @@ import { notificationService, ProgressNotification } from '../notifications';
 import { isSfdxProjectOpened } from '../predicates';
 import { taskViewService } from '../statuses';
 import { telemetryService } from '../telemetry';
+import { getRootWorkspacePath, hasRootWorkspace } from '../util';
 
 export class LightningFilePathExistsChecker
   implements PostconditionChecker<DirFileNameSelection> {
@@ -153,6 +154,20 @@ export class EmptyParametersGatherer implements ParametersGatherer<{}> {
   }
 }
 
+export class FilePathGatherer implements ParametersGatherer<string> {
+  private filePath: string;
+  public constructor(uri: vscode.Uri) {
+    this.filePath = uri.fsPath;
+  }
+
+  public async gather(): Promise<CancelResponse | ContinueResponse<string>> {
+    if (hasRootWorkspace()) {
+      return { type: 'CONTINUE', data: this.filePath };
+    }
+    return { type: 'CANCEL' };
+  }
+}
+
 export type FileSelection = { file: string };
 export class FileSelector implements ParametersGatherer<FileSelection> {
   private readonly include: string;
@@ -216,7 +231,7 @@ export abstract class SelectDirPath
   public async gather(): Promise<
     CancelResponse | ContinueResponse<{ outputdir: string }>
   > {
-    const rootPath = vscode.workspace.rootPath;
+    const rootPath = getRootWorkspacePath();
     let outputdir;
     if (rootPath) {
       if (
@@ -351,19 +366,25 @@ export abstract class SfdxCommandletExecutor<T>
     taskViewService.addCommandExecution(execution, cancellationTokenSource);
   }
 
-  public logMetric(logName?: string) {
-    telemetryService.sendCommandEvent(logName);
+  public logMetric(
+    logName: string | undefined,
+    executionTime: [number, number]
+  ) {
+    telemetryService.sendCommandEvent(logName, executionTime);
   }
 
   public execute(response: ContinueResponse<T>): void {
+    const startTime = process.hrtime();
     const cancellationTokenSource = new vscode.CancellationTokenSource();
     const cancellationToken = cancellationTokenSource.token;
     const execution = new CliCommandExecutor(this.build(response.data), {
-      cwd: vscode.workspace.rootPath
+      cwd: getRootWorkspacePath()
     }).execute(cancellationToken);
 
+    execution.processExitSubject.subscribe(() => {
+      this.logMetric(execution.command.logName, startTime);
+    });
     this.attachExecution(execution, cancellationTokenSource, cancellationToken);
-    this.logMetric(execution.command.logName);
   }
 
   public abstract build(data: T): Command;

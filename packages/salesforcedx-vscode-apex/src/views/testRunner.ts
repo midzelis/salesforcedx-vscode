@@ -4,14 +4,13 @@
 //  * Licensed under the BSD 3-Clause license.
 //  * For full license text, see LICENSE.txt file in the repo root or https://opensource.org/licenses/BSD-3-Clause
 //  */
+import { TestRunner } from '@salesforce/salesforcedx-utils-vscode/out/src/cli/';
 import * as events from 'events';
-import * as path from 'path';
-import * as pathExists from 'path-exists';
-import { mkdir } from 'shelljs';
 import * as vscode from 'vscode';
 import { nls } from '../messages';
 import { ReadableApexTestRunExecutor } from './readableApexTestRunExecutor';
 import {
+  ApexTestGroupNode,
   ApexTestNode,
   ApexTestOutlineProvider,
   TestNode
@@ -25,20 +24,36 @@ const EmptyParametersGatherer = sfdxCoreExports.EmptyParametersGatherer;
 const SfdxCommandlet = sfdxCoreExports.SfdxCommandlet;
 const SfdxWorkspaceChecker = sfdxCoreExports.SfdxWorkspaceChecker;
 const channelService = sfdxCoreExports.channelService;
+const sfdxCoreSettings = sfdxCoreExports.sfdxCoreSettings;
 export class ApexTestRunner {
   private testOutline: ApexTestOutlineProvider;
-  private eventsEmitter = new events.EventEmitter();
-  constructor(testOutline: ApexTestOutlineProvider) {
+  private eventsEmitter: events.EventEmitter;
+  constructor(
+    testOutline: ApexTestOutlineProvider,
+    eventsEmitter?: events.EventEmitter
+  ) {
     this.testOutline = testOutline;
+    this.eventsEmitter = eventsEmitter || new events.EventEmitter();
     this.eventsEmitter.on('sfdx:update_selection', this.updateSelection);
   }
 
-  public async showErrorMessage(test: TestNode) {
+  public showErrorMessage(test: TestNode) {
+    let testNode = test;
     let position: vscode.Range | number = test.location!.range;
-    if (test instanceof ApexTestNode) {
-      const errorMessage = test.errorMessage;
+    if (testNode instanceof ApexTestGroupNode) {
+      if (test.contextValue === 'apexTestGroup_Fail') {
+        const failedTest = test.children.find(
+          testCase => testCase.contextValue === 'apexTest_Fail'
+        );
+        if (failedTest) {
+          testNode = failedTest;
+        }
+      }
+    }
+    if (testNode instanceof ApexTestNode) {
+      const errorMessage = testNode.errorMessage;
       if (errorMessage && errorMessage !== '') {
-        const stackTrace = test.stackTrace;
+        const stackTrace = testNode.stackTrace;
         position =
           parseInt(
             stackTrace.substring(
@@ -54,8 +69,9 @@ export class ApexTestRunner {
         channelService.showChannelOutput();
       }
     }
-    if (test.location) {
-      vscode.window.showTextDocument(test.location.uri).then(() => {
+
+    if (testNode.location) {
+      vscode.window.showTextDocument(testNode.location.uri).then(() => {
         this.eventsEmitter.emit('sfdx:update_selection', position);
       });
     }
@@ -81,48 +97,28 @@ export class ApexTestRunner {
 
   public getTempFolder(): string {
     if (vscode.workspace && vscode.workspace.workspaceFolders) {
-      const apexDir = path.join(
+      const apexDir = new TestRunner().getTempFolder(
         vscode.workspace.workspaceFolders[0].uri.fsPath,
-        '.sfdx',
-        'tools',
-        'testresults',
         'apex'
       );
-
-      if (!pathExists.sync(apexDir)) {
-        mkdir('-p', apexDir);
-      }
       return apexDir;
     } else {
       throw new Error(nls.localize('cannot_determine_workspace'));
     }
   }
 
-  public async runTestOrTestClass(test: TestNode) {
-    await this.testOutline.refresh();
-    const tmpFolder = this.getTempFolder();
-    const builder = new ReadableApexTestRunExecutor(
-      [test.name],
-      false,
-      tmpFolder,
-      this.testOutline
-    );
-    const commandlet = new SfdxCommandlet(
-      new SfdxWorkspaceChecker(),
-      new EmptyParametersGatherer(),
-      builder
-    );
-    await commandlet.run();
+  public async runAllApexTests(): Promise<void> {
+    const tests = Array.from(this.testOutline.testStrings.values());
+    await this.runApexTests(tests);
   }
 
-  public async runApexTests(): Promise<void> {
-    await this.testOutline.refresh();
+  public async runApexTests(tests: string[]) {
     const tmpFolder = this.getTempFolder();
+    const getCodeCoverage = sfdxCoreSettings.getRetrieveTestCodeCoverage();
     const builder = new ReadableApexTestRunExecutor(
-      Array.from(this.testOutline.testStrings.values()),
-      false,
-      tmpFolder,
-      this.testOutline
+      tests,
+      getCodeCoverage,
+      tmpFolder
     );
     const commandlet = new SfdxCommandlet(
       new SfdxWorkspaceChecker(),

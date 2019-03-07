@@ -20,6 +20,7 @@ import { channelService } from '../channels';
 import { nls } from '../messages';
 import { notificationService, ProgressNotification } from '../notifications';
 import { taskViewService } from '../statuses';
+import { getRootWorkspacePath } from '../util';
 import {
   EmptyParametersGatherer,
   SfdxCommandlet,
@@ -87,15 +88,18 @@ export class StopActiveDebuggerSessionExecutor extends SfdxCommandletExecutor<{}
   }
 
   public async execute(response: ContinueResponse<{}>): Promise<void> {
+    const startTime = process.hrtime();
     const cancellationTokenSource = new vscode.CancellationTokenSource();
     const cancellationToken = cancellationTokenSource.token;
 
     const execution = new CliCommandExecutor(this.build(response.data), {
-      cwd: vscode.workspace.rootPath
+      cwd: getRootWorkspacePath()
     }).execute(cancellationToken);
 
     const resultPromise = new CommandOutput().getCmdResult(execution);
-    this.logMetric(execution.command.logName);
+    execution.processExitSubject.subscribe(() => {
+      this.logMetric(execution.command.logName, startTime);
+    });
     channelService.streamCommandOutput(execution);
     channelService.showChannelOutput();
     ProgressNotification.show(execution, cancellationTokenSource);

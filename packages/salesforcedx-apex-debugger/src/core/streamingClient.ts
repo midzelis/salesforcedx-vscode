@@ -69,12 +69,12 @@ export class StreamingClientInfo {
 }
 
 export class StreamingClientInfoBuilder {
-  public channel: string;
-  public timeout: number;
-  public errorHandler: (reason: string) => void;
-  public connectedHandler: () => void;
-  public disconnectedHandler: () => void;
-  public messageHandler: (message: any) => void;
+  public channel!: string;
+  public timeout: number = DEFAULT_STREAMING_TIMEOUT_MS;
+  public errorHandler: (reason: string) => void = () => {};
+  public connectedHandler: () => void = () => {};
+  public disconnectedHandler: () => void = () => {};
+  public messageHandler: (message: any) => void = () => {};
 
   public forChannel(channel: string): StreamingClientInfoBuilder {
     this.channel = channel;
@@ -148,12 +148,12 @@ export class StreamingClient {
   public async subscribe(): Promise<void> {
     let subscribeAccept: () => void;
     let subscribeReject: () => void;
-    const returnPromise = new Promise<
-      void
-    >((resolve: () => void, reject: () => void) => {
-      subscribeAccept = resolve;
-      subscribeReject = reject;
-    });
+    const returnPromise = new Promise<void>(
+      (resolve: () => void, reject: () => void) => {
+        subscribeAccept = resolve;
+        subscribeReject = reject;
+      }
+    );
 
     this.client.on('transport:down', async () => {
       if (!this.connected) {
@@ -174,9 +174,9 @@ export class StreamingClient {
           } else {
             this.connected = false;
             this.clientInfo.errorHandler(
-              `${nls.localize(
-                'streaming_handshake_error_text'
-              )}:${os.EOL}${JSON.stringify(message)}${os.EOL}`
+              `${nls.localize('streaming_handshake_error_text')}:${
+                os.EOL
+              }${JSON.stringify(message)}${os.EOL}`
             );
             subscribeReject();
           }

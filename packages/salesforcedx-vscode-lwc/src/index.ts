@@ -31,6 +31,7 @@ async function registerCommands(activateDX: boolean): Promise<vscode.Disposable 
 }
 
 export async function activate(context: vscode.ExtensionContext) {
+    const extensionHRStart = process.hrtime();
     const serverModule = context.asAbsolutePath(path.join('node_modules', 'lwc-language-server', 'lib', 'server.js'));
 
     if (!vscode.workspace.workspaceFolders) {
@@ -54,12 +55,11 @@ export async function activate(context: vscode.ExtensionContext) {
     }
 
     // Commands
-    registerCommands(sfdxWorkspace).then(disposable => {
-        if (disposable) {
-            context.subscriptions.push(disposable);
-        }
-    });
-    telemetryService.sendExtensionActivationEvent();
+    const disposable = await registerCommands(sfdxWorkspace);
+    if (disposable) {
+        context.subscriptions.push(disposable);
+    }
+    await telemetryService.sendExtensionActivationEvent(extensionHRStart);
 }
 
 // See https://github.com/Microsoft/vscode-languageserver-node/issues/105
@@ -128,7 +128,7 @@ export async function populateEslintSettingIfNecessary(context: vscode.Extension
     }
 }
 
-export function deactivate() {
+export async function deactivate() {
     console.log('SFDX LWC Extension Deactivated');
-    telemetryService.sendExtensionDeactivationEvent();
+    await telemetryService.sendExtensionDeactivationEvent();
 }

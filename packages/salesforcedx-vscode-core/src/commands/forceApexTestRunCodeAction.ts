@@ -7,12 +7,14 @@
 
 import {
   Command,
-  SfdxCommandBuilder
+  SfdxCommandBuilder,
+  TestRunner
 } from '@salesforce/salesforcedx-utils-vscode/out/src/cli';
 import * as vscode from 'vscode';
 import { nls } from '../messages';
 import { notificationService } from '../notifications';
 import { sfdxCoreSettings } from '../settings';
+import { getRootWorkspacePath, hasRootWorkspace } from '../util';
 import {
   EmptyParametersGatherer,
   SfdxCommandlet,
@@ -63,11 +65,17 @@ export class ForceApexTestRunCodeActionExecutor extends SfdxCommandletExecutor<{
   protected test: string;
   protected shouldGetCodeCoverage: boolean = false;
   protected builder: SfdxCommandBuilder = new SfdxCommandBuilder();
+  private outputToJson: string;
 
-  public constructor(test: string, shouldGetCodeCoverage: boolean) {
+  public constructor(
+    test: string,
+    shouldGetCodeCoverage: boolean,
+    outputToJson: string
+  ) {
     super();
     this.test = test || '';
     this.shouldGetCodeCoverage = shouldGetCodeCoverage;
+    this.outputToJson = outputToJson;
   }
 
   public build(data: {}): Command {
@@ -78,7 +86,7 @@ export class ForceApexTestRunCodeActionExecutor extends SfdxCommandletExecutor<{
       .withArg('force:apex:test:run')
       .withFlag('--tests', this.test)
       .withFlag('--resultformat', 'human')
-      .withArg('--synchronous')
+      .withFlag('--outputdir', this.outputToJson)
       .withFlag('--loglevel', 'error')
       .withLogName('force_apex_test_run_code_action');
 
@@ -91,15 +99,26 @@ export class ForceApexTestRunCodeActionExecutor extends SfdxCommandletExecutor<{
 }
 
 async function forceApexTestRunCodeAction(test: string) {
-  const getCodeCoverage: boolean = sfdxCoreSettings
-    .getConfiguration()
-    .get('retrieve-test-code-coverage') as boolean;
+  const getCodeCoverage = sfdxCoreSettings.getRetrieveTestCodeCoverage();
+  const outputToJson = getTempFolder();
   const commandlet = new SfdxCommandlet(
     new SfdxWorkspaceChecker(),
     new EmptyParametersGatherer(),
-    new ForceApexTestRunCodeActionExecutor(test, getCodeCoverage)
+    new ForceApexTestRunCodeActionExecutor(test, getCodeCoverage, outputToJson)
   );
   await commandlet.run();
+}
+
+function getTempFolder(): string {
+  if (hasRootWorkspace()) {
+    const apexDir = new TestRunner().getTempFolder(
+      getRootWorkspacePath(),
+      'apex'
+    );
+    return apexDir;
+  } else {
+    throw new Error(nls.localize('cannot_determine_workspace'));
+  }
 }
 
 //   T E S T   C L A S S

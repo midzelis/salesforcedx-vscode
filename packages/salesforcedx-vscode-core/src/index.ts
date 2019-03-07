@@ -4,9 +4,8 @@
  * Licensed under the BSD 3-Clause license.
  * For full license text, see LICENSE.txt file in the repo root or https://opensource.org/licenses/BSD-3-Clause
  */
-import * as path from 'path';
+
 import * as vscode from 'vscode';
-import { ConfigurationTarget } from 'vscode';
 import { channelService } from './channels';
 import {
   CompositeParametersGatherer,
@@ -26,6 +25,7 @@ import {
   forceAuthLogoutAll,
   forceAuthWebLogin,
   forceConfigList,
+  forceConfigSet,
   forceDataSoqlQuery,
   forceDebuggerStop,
   forceGenerateFauxClassesCreate,
@@ -39,10 +39,13 @@ import {
   forceProjectWithManifestCreate,
   forceSfdxProjectCreate,
   forceSourceDelete,
-  forceSourceDeploy,
+  forceSourceDeployManifest,
+  forceSourceDeployMultipleSourcePaths,
+  forceSourceDeploySourcePath,
   forceSourcePull,
   forceSourcePush,
-  forceSourceRetrieve,
+  forceSourceRetrieveManifest,
+  forceSourceRetrieveSourcePath,
   forceSourceStatus,
   forceStartApexDebugLogging,
   forceStopApexDebugLogging,
@@ -56,26 +59,21 @@ import {
   SfdxWorkspaceChecker,
   turnOffLogging
 } from './commands';
+import { initSObjectDefinitions } from './commands/forceGenerateFauxClasses';
 import { getUserId } from './commands/forceStartApexDebugLogging';
-import {
-  isvDebugBootstrap,
-  setupGlobalDefaultUserIsvAuth
-} from './commands/isvdebugging/bootstrapCmd';
-import {
-  CLIENT_ID,
-  SFDX_CLIENT_ENV_VAR,
-  TERMINAL_INTEGRATED_ENVS
-} from './constants';
+import { isvDebugBootstrap } from './commands/isvdebugging/bootstrapCmd';
 import {
   registerDefaultUsernameWatcher,
   setupWorkspaceOrgType
 } from './context';
 import * as decorators from './decorators';
-import { nls } from './messages';
 import { isDemoMode } from './modes/demo-mode';
 import { notificationService, ProgressNotification } from './notifications';
+import { setDefaultOrg, showDefaultOrg } from './orgPicker';
+import { registerPushOrDeployOnSave, sfdxCoreSettings } from './settings';
 import { taskViewService } from './statuses';
 import { telemetryService } from './telemetry';
+import { getRootWorkspacePath, hasRootWorkspace, isCLIInstalled, showCLINotInstalledMessage } from './util';
 
 function registerCommands(
   extensionContext: vscode.ExtensionContext
@@ -109,17 +107,21 @@ function registerCommands(
     'sfdx.force.source.delete.current.file',
     forceSourceDelete
   );
-  const forceSourceDeployCmd = vscode.commands.registerCommand(
-    'sfdx.force.source.deploy',
-    forceSourceDeploy
-  );
-  const forceSourceDeployCurrentFileCmd = vscode.commands.registerCommand(
-    'sfdx.force.source.deploy.current.file',
-    forceSourceDeploy
+  const forceSourceDeployCurrentSourceFileCmd = vscode.commands.registerCommand(
+    'sfdx.force.source.deploy.current.source.file',
+    forceSourceDeploySourcePath
   );
   const forceSourceDeployInManifestCmd = vscode.commands.registerCommand(
     'sfdx.force.source.deploy.in.manifest',
-    forceSourceDeploy
+    forceSourceDeployManifest
+  );
+  const forceSourceDeployMultipleSourcePathsCmd = vscode.commands.registerCommand(
+    'sfdx.force.source.deploy.multiple.source.paths',
+    forceSourceDeployMultipleSourcePaths
+  );
+  const forceSourceDeploySourcePathCmd = vscode.commands.registerCommand(
+    'sfdx.force.source.deploy.source.path',
+    forceSourceDeploySourcePath
   );
   const forceSourcePullCmd = vscode.commands.registerCommand(
     'sfdx.force.source.pull',
@@ -140,16 +142,16 @@ function registerCommands(
     { flag: '--forceoverwrite' }
   );
   const forceSourceRetrieveCmd = vscode.commands.registerCommand(
-    'sfdx.force.source.retrieve',
-    forceSourceRetrieve
+    'sfdx.force.source.retrieve.source.path',
+    forceSourceRetrieveSourcePath
   );
   const forceSourceRetrieveCurrentFileCmd = vscode.commands.registerCommand(
-    'sfdx.force.source.retrieve.current.file',
-    forceSourceRetrieve
+    'sfdx.force.source.retrieve.current.source.file',
+    forceSourceRetrieveSourcePath
   );
   const forceSourceRetrieveInManifestCmd = vscode.commands.registerCommand(
     'sfdx.force.source.retrieve.in.manifest',
-    forceSourceRetrieve
+    forceSourceRetrieveManifest
   );
   const forceSourceStatusCmd = vscode.commands.registerCommand(
     'sfdx.force.source.status',
@@ -307,6 +309,15 @@ function registerCommands(
     forceApexLogGet
   );
 
+  const forceSetDefaultOrgCmd = vscode.commands.registerCommand(
+    'sfdx.force.set.default.org',
+    setDefaultOrg
+  );
+  const forceConfigSetCmd = vscode.commands.registerCommand(
+    'sfdx.force.config.set',
+    forceConfigSet
+  );
+
   return vscode.Disposable.from(
     forceApexExecuteDocumentCmd,
     forceApexExecuteSelectionCmd,
@@ -326,9 +337,10 @@ function registerCommands(
     forceOrgOpenCmd,
     forceSourceDeleteCmd,
     forceSourceDeleteCurrentFileCmd,
-    forceSourceDeployCmd,
-    forceSourceDeployCurrentFileCmd,
+    forceSourceDeployCurrentSourceFileCmd,
     forceSourceDeployInManifestCmd,
+    forceSourceDeployMultipleSourcePathsCmd,
+    forceSourceDeploySourcePathCmd,
     forceSourcePullCmd,
     forceSourcePullForceCmd,
     forceSourcePushCmd,
@@ -359,41 +371,23 @@ function registerCommands(
     forceStartApexDebugLoggingCmd,
     forceStopApexDebugLoggingCmd,
     isvDebugBootstrapCmd,
-    forceApexLogGetCmd
+    forceApexLogGetCmd,
+    forceSetDefaultOrgCmd,
+    forceConfigSetCmd
   );
 }
 
-function registerIsvAuthWatcher(context: vscode.ExtensionContext) {
-  if (
-    vscode.workspace.workspaceFolders instanceof Array &&
-    vscode.workspace.workspaceFolders.length > 0
-  ) {
-    const configPath = path.join(
-      vscode.workspace.workspaceFolders[0].uri.fsPath,
-      '.sfdx',
-      'sfdx-config.json'
-    );
-    const isvAuthWatcher = vscode.workspace.createFileSystemWatcher(configPath);
-    isvAuthWatcher.onDidChange(uri => setupGlobalDefaultUserIsvAuth());
-    isvAuthWatcher.onDidCreate(uri => setupGlobalDefaultUserIsvAuth());
-    isvAuthWatcher.onDidDelete(uri => setupGlobalDefaultUserIsvAuth());
-    context.subscriptions.push(isvAuthWatcher);
-  }
-}
-
 export async function activate(context: vscode.ExtensionContext) {
-  console.log('SFDX CLI Extension Activated');
-
+  const extensionHRStart = process.hrtime();
   // Telemetry
   const machineId =
     vscode && vscode.env ? vscode.env.machineId : 'someValue.machineId';
   telemetryService.initializeService(context, machineId);
   telemetryService.showTelemetryMessage();
-  telemetryService.sendExtensionActivationEvent();
 
   // Context
   let sfdxProjectOpened = false;
-  if (vscode.workspace.rootPath) {
+  if (hasRootWorkspace()) {
     const files = await vscode.workspace.findFiles('**/sfdx-project.json');
     sfdxProjectOpened = files && files.length > 0;
   }
@@ -412,55 +406,25 @@ export async function activate(context: vscode.ExtensionContext) {
     replayDebuggerExtensionInstalled
   );
 
-  // Set environment variable to add logging for VSCode API calls
-  process.env[SFDX_CLIENT_ENV_VAR] = CLIENT_ID;
-  const config = vscode.workspace.getConfiguration();
-
-  TERMINAL_INTEGRATED_ENVS.forEach(env => {
-    const section: { [k: string]: any } = config.get(env)!;
-    section[SFDX_CLIENT_ENV_VAR] = CLIENT_ID;
-    config.update(env, section, ConfigurationTarget.Workspace);
-  });
-
   vscode.commands.executeCommand(
     'setContext',
     'sfdx:project_opened',
     sfdxProjectOpened
   );
 
-  const sfdxApexDebuggerExtension = vscode.extensions.getExtension(
-    'salesforce.salesforcedx-vscode-apex-debugger'
-  );
-  vscode.commands.executeCommand(
-    'setContext',
-    'sfdx:apex_debug_extension_installed',
-    sfdxApexDebuggerExtension && sfdxApexDebuggerExtension.id
-  );
-  if (
-    sfdxProjectOpened &&
-    sfdxApexDebuggerExtension &&
-    sfdxApexDebuggerExtension.id
-  ) {
-    console.log('Setting up ISV Debugger environment variables');
-    // register watcher for ISV authentication and setup default user for CLI
-    // this is done in core because it shares access to GlobalCliEnvironment with the commands
-    // (VS Code does not seem to allow sharing npm modules between extensions)
-    try {
-      registerIsvAuthWatcher(context);
-      console.log('Configured file watcher for .sfdx/sfdx-config.json');
-      await setupGlobalDefaultUserIsvAuth();
-    } catch (e) {
-      console.error(e);
-      vscode.window.showWarningMessage(
-        nls.localize('isv_debug_config_environment_error')
-      );
-    }
+  if (isCLIInstalled()) {
+    // Set context for defaultusername org
+    await setupWorkspaceOrgType();
+    registerDefaultUsernameWatcher(context);
+
+    await showDefaultOrg();
+  } else {
+    showCLINotInstalledMessage();
+    telemetryService.sendError('Salesforce CLI is not installed');
   }
 
-  // Set context for defaultusername org
-  await setupWorkspaceOrgType();
-  registerDefaultUsernameWatcher(context);
-
+  // Register filewatcher for push or deploy on save
+  await registerPushOrDeployOnSave();
   // Commands
   const commands = registerCommands(context);
   context.subscriptions.push(commands);
@@ -473,14 +437,21 @@ export async function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(treeDataProvider);
 
   // Scratch Org Decorator
-  if (vscode.workspace.rootPath) {
+  if (hasRootWorkspace()) {
     decorators.showOrg();
     decorators.monitorOrgConfigChanges();
   }
 
   // Demo mode Decorator
-  if (vscode.workspace.rootPath && isDemoMode()) {
+  if (hasRootWorkspace() && isDemoMode()) {
     decorators.showDemoMode();
+  }
+
+  // Refresh SObject definitions if there aren't any faux classes
+  if (sfdxCoreSettings.getEnableSObjectRefreshOnStartup()) {
+    initSObjectDefinitions(getRootWorkspacePath()).catch(e =>
+      telemetryService.sendErrorEvent(e.message, e.stack)
+    );
   }
 
   const api: any = {
@@ -492,14 +463,18 @@ export async function activate(context: vscode.ExtensionContext) {
     SelectStrictDirPath,
     SfdxCommandlet,
     SfdxCommandletExecutor,
+    sfdxCoreSettings,
     SfdxWorkspaceChecker,
     channelService,
     notificationService,
     taskViewService,
     telemetryService,
-    getUserId
+    getUserId,
+    isCLIInstalled
   };
 
+  telemetryService.sendExtensionActivationEvent(extensionHRStart);
+  console.log('SFDX CLI Extension Activated');
   return api;
 }
 

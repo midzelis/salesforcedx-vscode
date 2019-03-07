@@ -19,11 +19,14 @@ import {
   VscodeDebuggerMessage,
   VscodeDebuggerMessageType
 } from '@salesforce/salesforcedx-apex-debugger/out/src';
+import * as path from 'path';
 import * as vscode from 'vscode';
 import { DebugProtocol } from 'vscode-debugprotocol';
 import { DebugConfigurationProvider } from './adapter/debugConfigurationProvider';
+import { setupGlobalDefaultUserIsvAuth } from './context';
 import { nls } from './messages';
 import { telemetryService } from './telemetry';
+
 const cachedExceptionBreakpoints: Map<
   string,
   ExceptionBreakpointItem
@@ -234,8 +237,27 @@ function notifyDebuggerSessionFileChanged(): void {
   }
 }
 
+function registerIsvAuthWatcher(context: vscode.ExtensionContext) {
+  if (
+    vscode.workspace.workspaceFolders instanceof Array &&
+    vscode.workspace.workspaceFolders.length > 0
+  ) {
+    const configPath = path.join(
+      vscode.workspace.workspaceFolders[0].uri.fsPath,
+      '.sfdx',
+      'sfdx-config.json'
+    );
+    const isvAuthWatcher = vscode.workspace.createFileSystemWatcher(configPath);
+    isvAuthWatcher.onDidChange(uri => setupGlobalDefaultUserIsvAuth());
+    isvAuthWatcher.onDidCreate(uri => setupGlobalDefaultUserIsvAuth());
+    isvAuthWatcher.onDidDelete(uri => setupGlobalDefaultUserIsvAuth());
+    context.subscriptions.push(isvAuthWatcher);
+  }
+}
+
 export async function activate(context: vscode.ExtensionContext) {
   console.log('Apex Debugger Extension Activated');
+  const extensionHRStart = process.hrtime();
   const commands = registerCommands();
   const fileWatchers = registerFileWatchers();
   context.subscriptions.push(commands, fileWatchers);
@@ -246,8 +268,25 @@ export async function activate(context: vscode.ExtensionContext) {
     )
   );
 
-  // Telemetry
   if (sfdxCoreExtension && sfdxCoreExtension.exports) {
+    if (sfdxCoreExtension.exports.isCLIInstalled()) {
+      console.log('Setting up ISV Debugger environment variables');
+      // register watcher for ISV authentication and setup default user for CLI
+      // this is done in core because it shares access to GlobalCliEnvironment with the commands
+      // (VS Code does not seem to allow sharing npm modules between extensions)
+      try {
+        registerIsvAuthWatcher(context);
+        console.log('Configured file watcher for .sfdx/sfdx-config.json');
+        await setupGlobalDefaultUserIsvAuth();
+      } catch (e) {
+        console.error(e);
+        vscode.window.showWarningMessage(
+          nls.localize('isv_debug_config_environment_error')
+        );
+      }
+    }
+
+    // Telemetry
     sfdxCoreExtension.exports.telemetryService.showTelemetryMessage();
 
     telemetryService.initializeService(
@@ -256,7 +295,7 @@ export async function activate(context: vscode.ExtensionContext) {
     );
   }
 
-  telemetryService.sendExtensionActivationEvent();
+  telemetryService.sendExtensionActivationEvent(extensionHRStart);
 }
 
 export function deactivate() {

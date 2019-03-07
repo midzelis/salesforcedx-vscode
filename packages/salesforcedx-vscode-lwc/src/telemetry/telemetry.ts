@@ -5,6 +5,8 @@
  * For full license text, see LICENSE.txt file in the repo root or https://opensource.org/licenses/BSD-3-Clause
  */
 import * as vscode from 'vscode';
+
+import * as util from 'util';
 import TelemetryReporter from 'vscode-extension-telemetry';
 import { telemetryService } from '.';
 import { waitForDX } from '../dxsupport/waitForDX';
@@ -12,78 +14,82 @@ import { waitForDX } from '../dxsupport/waitForDX';
 const EXTENSION_NAME = 'salesforcedx-vscode-lwc';
 
 export class TelemetryService {
-  private static instance: TelemetryService;
-  private reporter: TelemetryReporter | undefined;
-  private isTelemetryEnabled: boolean;
-  private setup: Promise<TelemetryService | undefined> | undefined;
+    private static instance: TelemetryService;
+    private reporter: TelemetryReporter | undefined;
+    private isTelemetryEnabled: boolean;
+    private setup: Promise<TelemetryService | undefined> | undefined;
 
-  constructor() {
-    this.isTelemetryEnabled = false;
-  }
-
-  public static getInstance() {
-    if (!TelemetryService.instance) {
-      TelemetryService.instance = new TelemetryService();
+    constructor() {
+        this.isTelemetryEnabled = false;
     }
-    return TelemetryService.instance;
-  }
 
-  public async setupVSCodeTelemetry() {
-    // if its already set up
-    if (this.reporter) {
-      return Promise.resolve(telemetryService);
+    public static getInstance() {
+        if (!TelemetryService.instance) {
+            TelemetryService.instance = new TelemetryService();
+        }
+        return TelemetryService.instance;
     }
-    if (!this.setup) {
-      this.setup = waitForDX()
-        .then((coreDependency: vscode.Extension<any>) => {
-          coreDependency.exports.telemetryService.showTelemetryMessage();
 
-          telemetryService.initializeService(
-            coreDependency.exports.telemetryService.getReporter(),
-            coreDependency.exports.telemetryService.isTelemetryEnabled()
-          );
-          return telemetryService;
-        })
-        .catch(err => {
-          return undefined;
-        });
+    public async setupVSCodeTelemetry() {
+        // if its already set up
+        if (this.reporter) {
+            return Promise.resolve(telemetryService);
+        }
+        if (!this.setup) {
+            this.setup = waitForDX()
+                .then((coreDependency: vscode.Extension<any>) => {
+                    coreDependency.exports.telemetryService.showTelemetryMessage();
+
+                    telemetryService.initializeService(
+                        coreDependency.exports.telemetryService.getReporter(),
+                        coreDependency.exports.telemetryService.isTelemetryEnabled()
+                    );
+                    return telemetryService;
+                })
+                .catch(err => {
+                    return undefined;
+                });
+        }
+        return this.setup;
     }
-    return this.setup;
-  }
 
-  public initializeService(
-    reporter: TelemetryReporter,
-    isTelemetryEnabled: boolean
-  ): void {
-    this.isTelemetryEnabled = isTelemetryEnabled;
-    this.reporter = reporter;
-  }
-
-  public async sendExtensionActivationEvent(): Promise<void> {
-    await this.setupVSCodeTelemetry();
-    if (this.reporter !== undefined && this.isTelemetryEnabled) {
-      this.reporter.sendTelemetryEvent('activationEvent', {
-        extensionName: EXTENSION_NAME
-      });
+    public initializeService(reporter: TelemetryReporter, isTelemetryEnabled: boolean): void {
+        this.isTelemetryEnabled = isTelemetryEnabled;
+        this.reporter = reporter;
     }
-  }
 
-  public async sendExtensionDeactivationEvent(): Promise<void> {
-    await this.setupVSCodeTelemetry();
-    if (this.reporter !== undefined && this.isTelemetryEnabled) {
-      this.reporter.sendTelemetryEvent('deactivationEvent', {
-        extensionName: EXTENSION_NAME
-      });
+    public async sendExtensionActivationEvent(hrstart: [number, number]): Promise<void> {
+        await this.setupVSCodeTelemetry();
+        if (this.reporter !== undefined && this.isTelemetryEnabled) {
+            const startupTime = this.getEndHRTime(hrstart);
+            this.reporter.sendTelemetryEvent('activationEvent', {
+                extensionName: EXTENSION_NAME,
+                startupTime
+            });
+        }
     }
-  }
 
-  public async sendCommandEvent(commandName?: string): Promise<void> {
-    await this.setupVSCodeTelemetry();
-    if (this.reporter !== undefined && this.isTelemetryEnabled && commandName) {
-      this.reporter.sendTelemetryEvent('commandExecution', {
-        extensionName: EXTENSION_NAME,
-        commandName
-      });
+    public async sendExtensionDeactivationEvent(): Promise<void> {
+        await this.setupVSCodeTelemetry();
+        if (this.reporter !== undefined && this.isTelemetryEnabled) {
+            this.reporter.sendTelemetryEvent('deactivationEvent', {
+                extensionName: EXTENSION_NAME
+            });
+        }
     }
-  }
+
+    public async sendCommandEvent(commandName?: string): Promise<void> {
+        await this.setupVSCodeTelemetry();
+        if (this.reporter !== undefined && this.isTelemetryEnabled && commandName) {
+            this.reporter.sendTelemetryEvent('commandExecution', {
+                extensionName: EXTENSION_NAME,
+                commandName
+            });
+        }
+    }
+
+    private getEndHRTime(hrstart: [number, number]): string {
+        const hrend = process.hrtime(hrstart);
+        return util.format('%ds %dms', hrend[0], hrend[1] / 1000000);
+    }
 }

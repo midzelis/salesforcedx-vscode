@@ -19,6 +19,7 @@ import * as vscode from 'vscode';
 import { channelService } from '../channels';
 import { APEX_CODE_DEBUG_LEVEL, VISUALFORCE_DEBUG_LEVEL } from '../constants';
 import { nls } from '../messages';
+import { getRootWorkspacePath, OrgAuthInfo } from '../util';
 import {
   EmptyParametersGatherer,
   SfdxCommandlet,
@@ -26,7 +27,7 @@ import {
   SfdxWorkspaceChecker
 } from './commands';
 
-import { getDefaultUsernameOrAlias, getUsername } from '../context';
+import { getDefaultUsernameOrAlias } from '../context';
 import { telemetryService } from '../telemetry';
 import { developerLogTraceFlag } from './';
 
@@ -45,6 +46,7 @@ export class ForceStartApexDebugLoggingExecutor extends SfdxCommandletExecutor<{
   }
 
   public async execute(response: ContinueResponse<{}>): Promise<void> {
+    const startTime = process.hrtime();
     const executionWrapper = new CompositeCliCommandExecutor(
       this.build()
     ).execute(this.cancellationToken);
@@ -54,7 +56,10 @@ export class ForceStartApexDebugLoggingExecutor extends SfdxCommandletExecutor<{
       this.cancellationToken
     );
 
-    this.logMetric(executionWrapper.command.logName);
+    executionWrapper.processExitSubject.subscribe(() => {
+      this.logMetric(executionWrapper.command.logName, startTime);
+    });
+
     try {
       // query traceflag
       let resultJson = await this.subExecute(new ForceQueryTraceFlag().build());
@@ -80,9 +85,7 @@ export class ForceStartApexDebugLoggingExecutor extends SfdxCommandletExecutor<{
         const debugLevelId = resultJson.result.id;
         developerLogTraceFlag.setDebugLevelId(debugLevelId);
 
-        const userId = await getUserId(
-          vscode.workspace.workspaceFolders![0].uri.fsPath
-        );
+        const userId = await getUserId(getRootWorkspacePath());
         developerLogTraceFlag.validateDates();
         resultJson = await this.subExecute(new CreateTraceFlag(userId).build());
         developerLogTraceFlag.setTraceFlagId(resultJson.result.id);
@@ -97,7 +100,7 @@ export class ForceStartApexDebugLoggingExecutor extends SfdxCommandletExecutor<{
   private async subExecute(command: Command) {
     if (!this.cancellationToken.isCancellationRequested) {
       const execution = new CliCommandExecutor(command, {
-        cwd: vscode.workspace.workspaceFolders![0].uri.fsPath
+        cwd: getRootWorkspacePath()
       }).execute(this.cancellationToken);
       this.attachSubExecution(execution);
       const resultPromise = new CommandOutput().getCmdResult(execution);
@@ -109,7 +112,7 @@ export class ForceStartApexDebugLoggingExecutor extends SfdxCommandletExecutor<{
 
 export async function getUserId(projectPath: string): Promise<string> {
   const defaultUsernameOrAlias = await getDefaultUsernameOrAlias();
-  const username = await getUsername(defaultUsernameOrAlias!);
+  const username = await OrgAuthInfo.getUsername(defaultUsernameOrAlias!);
   const execution = new CliCommandExecutor(
     new ForceQueryUser(username).build(),
     {
@@ -154,8 +157,9 @@ export class CreateDebugLevel extends SfdxCommandletExecutor<{}> {
       .withFlag('--sobjecttype', 'DebugLevel')
       .withFlag(
         '--values',
-        `developername=${this.developerName} MasterLabel=${this
-          .developerName} apexcode=${APEX_CODE_DEBUG_LEVEL} visualforce=${VISUALFORCE_DEBUG_LEVEL}`
+        `developername=${this.developerName} MasterLabel=${
+          this.developerName
+        } apexcode=${APEX_CODE_DEBUG_LEVEL} visualforce=${VISUALFORCE_DEBUG_LEVEL}`
       )
       .withArg('--usetoolingapi')
       .withJson()
@@ -178,8 +182,9 @@ export class CreateTraceFlag extends SfdxCommandletExecutor<{}> {
       .withFlag('--sobjecttype', 'TraceFlag')
       .withFlag(
         '--values',
-        `tracedentityid='${this
-          .userId}' logtype=developer_log debuglevelid=${developerLogTraceFlag.getDebugLevelId()} StartDate='' ExpirationDate='${developerLogTraceFlag
+        `tracedentityid='${
+          this.userId
+        }' logtype=developer_log debuglevelid=${developerLogTraceFlag.getDebugLevelId()} StartDate='' ExpirationDate='${developerLogTraceFlag
           .getExpirationDate()
           .toUTCString()}`
       )

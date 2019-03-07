@@ -27,6 +27,7 @@ import { channelService } from '../channels';
 import { nls } from '../messages';
 import { notificationService, ProgressNotification } from '../notifications';
 import { taskViewService } from '../statuses';
+import { getRootWorkspacePath } from '../util';
 import {
   SfdxCommandlet,
   SfdxCommandletExecutor,
@@ -63,18 +64,23 @@ export class ForceApexLogGetExecutor extends SfdxCommandletExecutor<
   public async execute(
     response: ContinueResponse<ApexDebugLogIdStartTime>
   ): Promise<void> {
+    const startTime = process.hrtime();
     const cancellationTokenSource = new vscode.CancellationTokenSource();
     const cancellationToken = cancellationTokenSource.token;
     const execution = new CliCommandExecutor(this.build(response.data), {
       cwd: vscode.workspace.rootPath
     }).execute(cancellationToken);
     this.attachExecution(execution, cancellationTokenSource, cancellationToken);
-    this.logMetric(execution.command.logName);
+
+    execution.processExitSubject.subscribe(() => {
+      this.logMetric(execution.command.logName, startTime);
+    });
+
     const result = await new CommandOutput().getCmdResult(execution);
     const resultJson = JSON.parse(result);
     if (resultJson.status === 0) {
       const logDir = path.join(
-        vscode.workspace.workspaceFolders![0].uri.fsPath,
+        getRootWorkspacePath(),
         '.sfdx',
         'tools',
         'debug',
@@ -100,16 +106,23 @@ export type ApexDebugLogIdStartTime = {
   startTime: string;
 };
 
+export type ApexDebugLogUser = {
+  Name: string;
+};
+
 export type ApexDebugLogObject = {
   Id: string;
   StartTime: string;
   LogLength: number;
   Operation: string;
   Request: string;
+  Status: string;
+  LogUser: ApexDebugLogUser;
 };
 
 interface ApexDebugLogItem extends vscode.QuickPickItem {
   id: string;
+  startTime: string;
 }
 
 export class LogFileSelector
@@ -124,10 +137,14 @@ export class LogFileSelector
         const icon = '$(file-text) ';
         return {
           id: logInfo.Id,
-          label: icon + logInfo.Operation,
-          detail: moment(new Date(logInfo.StartTime)).format(
+          label: icon + logInfo.LogUser.Name + ' - ' + logInfo.Operation,
+          startTime: moment(new Date(logInfo.StartTime)).format(
             'M/DD/YYYY, h:mm:s a'
           ),
+          detail:
+            moment(new Date(logInfo.StartTime)).format('M/DD/YYYY, h:mm:s a') +
+            ' - ' +
+            logInfo.Status.substr(0, 150),
           description: `${(logInfo.LogLength / 1024).toFixed(2)} KB`
         } as ApexDebugLogItem;
       });
@@ -139,7 +156,7 @@ export class LogFileSelector
       if (logItem) {
         return {
           type: 'CONTINUE',
-          data: { id: logItem.id, startTime: logItem.detail! }
+          data: { id: logItem.id, startTime: logItem.startTime! }
         };
       }
     } else {
@@ -163,7 +180,7 @@ export class ForceApexLogList {
         .withJson()
         .withLogName('force_apex_log_list')
         .build(),
-      { cwd: vscode.workspace.workspaceFolders![0].uri.fsPath }
+      { cwd: getRootWorkspacePath() }
     ).execute();
     ProgressNotification.show(execution, cancellationTokenSource);
     taskViewService.addCommandExecution(execution, cancellationTokenSource);
